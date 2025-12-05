@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laberinto 3D con Controles Completos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        /* Estilos generales */
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #000;
+            color: #fff;
+        }
+        canvas {
+            display: block;
+        }
+
+        /* --- Controles de Movimiento (Izquierda) --- */
+        #mobile-controls-left {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            pointer-events: none; /* Permite que el toque pase a la pantalla si no está en el botón */
+            z-index: 10;
+        }
+        #d-pad-movement {
+            display: grid;
+            grid-template-areas: ". up ." "left down right";
+            gap: 5px;
+            pointer-events: auto; /* Hace que los botones sean clickeables */
+        }
+
+        /* --- Controles de Rotación (Derecha) --- */
+        #mobile-controls-right {
+            position: fixed;
+            bottom: 40px; /* Un poco más alto para dejar espacio al borde */
+            right: 30px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #rotation-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: auto;
+            align-items: flex-end; /* Alinea los botones a la derecha */
+        }
+        
+        /* Estilo General del Botón */
+        .control-button {
+            width: 60px;
+            height: 60px;
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 3px solid rgba(255, 255, 255, 0.5);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem; /* Más pequeño para texto */
+            font-weight: bold;
+            user-select: none;
+            cursor: pointer;
+            transition: background-color 0.1s, transform 0.1s;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+            padding: 5px;
+        }
+        
+        .control-button-move {
+            background-color: rgba(0, 150, 255, 0.6);
+        }
+        .control-button-rotate {
+             background-color: rgba(255, 0, 150, 0.6);
+        }
+
+        .control-button:active {
+            background-color: rgba(255, 255, 255, 0.5);
+            transform: scale(0.95);
+        }
+        /* Ocultar en escritorio y mostrar solo en móvil */
+        @media (min-width: 768px) {
+            #mobile-controls-left, #mobile-controls-right {
+                display: none;
+            }
+        }
+        /* Mensaje de instrucciones y victoria */
+        #message-box, #win-message {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-size: 1rem;
+            color: #eee;
+            z-index: 10;
+            text-align: center;
+            border: 2px solid #333;
+        }
+
+        #win-message {
+            top: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 30px;
+            font-size: 2rem;
+            font-weight: bold;
+            color: #ffcc00; 
+            background-color: rgba(25, 25, 50, 0.9);
+            border-color: #ffcc00;
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 10px #ffcc00; }
+            to { transform: translate(-50%, -50%) scale(1.05); box-shadow: 0 0 30px #ffcc00; }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="message-box" class="shadow-lg">
+        Controles: W/S (Avance/Retroceso), A/D (Lateral), Q/E (Giro). ¡Arrastra la pantalla para mirar arriba/abajo!
+    </div>
+
+    <div id="win-message" class="hidden shadow-2xl">
+        ¡GANASTE! Ya puedes entrar.
+    </div>
+
+    <!-- Controles Táctiles de Movimiento (Izquierda) -->
+    <div id="mobile-controls-left">
+        <div id="d-pad-movement">
+            <button id="up" class="control-button control-button-move">▲</button>
+            <button id="strafeLeft" class="control-button control-button-move">◀</button>
+            <button id="down" class="control-button control-button-move">▼</button>
+            <button id="strafeRight" class="control-button control-button-move">▶</button>
+        </div>
+    </div>
+
+    <!-- Controles Táctiles de Rotación (Derecha) -->
+    <div id="mobile-controls-right">
+        <div id="rotation-controls">
+            <button id="turnLeft" class="control-button control-button-rotate">Gira Izq</button>
+            <button id="turnRight" class="control-button control-button-rotate">Gira Der</button>
+        </div>
+    </div>
+
+
+    <script type="module">
+        // Variables de Three.js
+        let scene, camera, renderer;
+        let walls = [];
+        let light;
+        const tileSize = 2; 
+        const wallHeight = 2;
+        const playerHeight = 0.5;
+        const moveSpeed = 0.05;
+        const rotationSensitivity = 0.005; // Sensibilidad de giro por arrastre
+        const buttonRotationSpeed = 0.02; // Velocidad de giro por botón
+        let clock = new THREE.Clock();
+        let isGameOver = false;
+
+        // Variables para Mouselook/Touchlook (Giro de Pantalla)
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+
+        // Definición de la meta
+        const EXIT_GRID_X = 13;
+        const EXIT_GRID_Z = 13;
+        const EXIT_WORLD_X = (EXIT_GRID_X + 0.5) * tileSize;
+        const EXIT_WORLD_Z = (EXIT_GRID_Z + 0.5) * tileSize;
+        const WIN_DISTANCE_SQ = 1.5 * 1.5; 
+
+        // Estado de los controles (Movimiento y Rotación)
+        const controls = {
+            forward: false,
+            backward: false,
+            strafeLeft: false, 
+            strafeRight: false,
+            turnLeft: false,    // NUEVO: Giro a la izquierda
+            turnRight: false    // NUEVO: Giro a la derecha
+        };
+
+        const mazeMap = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1],
+            [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1],
+            [1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+        ];
+        const mazeSize = mazeMap.length;
+
+        // Función para inicializar la escena
+        function init() {
+            // 1. Configuración de la Escena
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+
+            // 2. Configuración de la Cámara
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(1.5 * tileSize, playerHeight, 1.5 * tileSize);
+
+            // 3. Configuración del Renderizador
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            // 4. Iluminación
+            const ambientLight = new THREE.AmbientLight(0x404040, 3);
+            scene.add(ambientLight);
+            light = new THREE.DirectionalLight(0xffffff, 5);
+            light.position.set(1, 1, 1);
+            scene.add(light);
+
+            // 5. Construir Laberinto y Meta
+            buildFloor();
+            buildMaze();
+            addGoalMarker();
+
+            // 6. Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            setupTouchlookControls(renderer.domElement); 
+            setupMobileControls();
+        }
+
+        // Función para crear la textura de tablero de ajedrez (blanco/negro)
+        function createCheckerboardTexture() {
+            const size = 16;
+            const data = new Uint8Array(3 * size * size);
+            const color1 = [0, 0, 0];
+            const color2 = [255, 255, 255]; 
+
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const color = (i % 2 === j % 2) ? color1 : color2;
+                    const stride = (i * size + j) * 3;
+                    data[stride] = color[0];
+                    data[stride + 1] = color[1];
+                    data[stride + 2] = color[2];
+                }
+            }
+            const texture = new THREE.DataTexture(data, size, size, THREE.RGBFormat);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            texture.repeat.set(mazeSize, mazeSize); 
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        // Función para construir el suelo
+        function buildFloor() {
+            const floorTexture = createCheckerboardTexture();
+            const floorGeometry = new THREE.PlaneGeometry(mazeSize * tileSize, mazeSize * tileSize);
+            const floorMaterial = new THREE.MeshPhongMaterial({ map: floorTexture, side: THREE.DoubleSide });
+            
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = Math.PI / 2;
+            floor.position.y = 0;
+            floor.position.x = (mazeSize / 2) * tileSize;
+            floor.position.z = (mazeSize / 2) * tileSize;
+            scene.add(floor);
+        }
+
+        // Función para construir las paredes del laberinto
+        function buildMaze() {
+            const wallGeometry = new THREE.BoxGeometry(tileSize, wallHeight, tileSize);
+            
+            for (let i = 0; i < mazeSize; i++) {
+                for (let j = 0; j < mazeSize; j++) {
+                    if (mazeMap[i][j] === 1) {
+                        const x = (j + 0.5) * tileSize;
+                        const z = (i + 0.5) * tileSize;
+
+                        const wallMaterial = new THREE.MeshPhongMaterial({ shininess: 30 });
+                        const wallMesh = new THREE.Mesh(wallGeometry, wallMaterial);
+                        wallMesh.position.set(x, wallHeight / 2, z);
+                        scene.add(wallMesh);
+                        walls.push(wallMesh);
+                    }
+                }
+            }
+        }
+
+        // Función para añadir el marcador de salida
+        function addGoalMarker() {
+            const geometry = new THREE.CylinderGeometry(0.5, 0.5, wallHeight * 1.5, 32);
+            const material = new THREE.MeshStandardMaterial({ 
+                emissive: 0xffcc00, 
+                emissiveIntensity: 5, 
+                color: 0xffcc00,
+                metalness: 0.8,
+                roughness: 0.1
+            });
+            const goal = new THREE.Mesh(geometry, material);
+            goal.position.set(EXIT_WORLD_X, wallHeight * 0.75, EXIT_WORLD_Z);
+            scene.add(goal);
+
+            // Esfera de luz para iluminar la meta
+            const pointLight = new THREE.PointLight(0xffcc00, 5, 5);
+            pointLight.position.set(EXIT_WORLD_X, wallHeight * 1.5, EXIT_WORLD_Z);
+            scene.add(pointLight);
+        }
+
+        // Función para cambiar el color de las paredes (HSL)
+        function updateColors(deltaTime) {
+            const time = clock.getElapsedTime();
+            const hue = (time * 0.1) % 1; 
+            
+            if (isGameOver) {
+                // Efecto de Parpadeo de Victoria
+                const intensity = (Math.sin(time * 30) * 0.5) + 0.5;
+                const winColor = new THREE.Color().setHSL(hue, 1.0, 0.5 * intensity + 0.5);
+                
+                scene.background.set(winColor);
+                light.color.set(0xffffff);
+                light.intensity = 10 + 10 * intensity;
+
+                walls.forEach((wall) => {
+                    wall.material.color.setHSL(hue, 1.0, 0.7 + intensity * 0.3);
+                });
+            } else {
+                // Ciclo de color normal
+                walls.forEach((wall, index) => {
+                    const h = (hue + index * 0.005) % 1; 
+                    const s = 0.9;
+                    const l = 0.5;
+                    wall.material.color.setHSL(h, s, l);
+                });
+            }
+        }
+
+        // --- Funciones de Control ---
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Mouselook (Escritorio)
+        function onMouseDown(event) {
+            if (isGameOver) return;
+            isDragging = true;
+            previousMousePosition.x = event.clientX;
+            previousMousePosition.y = event.clientY;
+        }
+
+        function onMouseUp(event) {
+            isDragging = false;
+        }
+
+        function onMouseMove(event) {
+            if (!isDragging || isGameOver) return;
+
+            const deltaX = event.clientX - previousMousePosition.x;
+            const deltaY = event.clientY - previousMousePosition.y;
+
+            // Rotación Horizontal (Yaw)
+            camera.rotation.y -= deltaX * rotationSensitivity;
+
+            // Rotación Vertical (Pitch)
+            camera.rotation.x -= deltaY * rotationSensitivity;
+            
+            // Limitar la rotación vertical entre -90 y 90 grados (aprox)
+            const PI_HALF = Math.PI / 2;
+            camera.rotation.x = Math.max(-PI_HALF, Math.min(PI_HALF, camera.rotation.x));
+
+            previousMousePosition.x = event.clientX;
+            previousMousePosition.y = event.clientY;
+        }
+
+        // Touchlook (Móvil)
+        function onTouchStart(event) {
+            if (isGameOver) return;
+            if (event.touches.length > 0) {
+                const touch = event.touches[0];
+                const dPadLeft = document.getElementById('d-pad-movement');
+                const dPadRight = document.getElementById('rotation-controls');
+                
+                // Solo activa Touchlook si el toque NO está en ningún D-pad
+                const isOverControl = (dPadLeft && dPadLeft.contains(event.target)) || 
+                                      (dPadRight && dPadRight.contains(event.target));
+
+                if (!isOverControl) {
+                    isDragging = true;
+                    previousMousePosition.x = touch.clientX;
+                    previousMousePosition.y = touch.clientY;
+                }
+            }
+        }
+
+        function onTouchMove(event) {
+            if (!isDragging || isGameOver || event.touches.length === 0) return;
+
+            const touch = event.touches[0];
+            const deltaX = touch.clientX - previousMousePosition.x;
+            const deltaY = touch.clientY - previousMousePosition.y;
+
+            // Rotación Horizontal (Yaw)
+            camera.rotation.y -= deltaX * rotationSensitivity * 2; 
+
+            // Rotación Vertical (Pitch)
+            camera.rotation.x -= deltaY * rotationSensitivity * 2;
+            
+            // Limitar la rotación vertical
+            const PI_HALF = Math.PI / 2;
+            camera.rotation.x = Math.max(-PI_HALF, Math.min(PI_HALF, camera.rotation.x));
+
+            previousMousePosition.x = touch.clientX;
+            previousMousePosition.y = touch.clientY;
+        }
+
+        function onTouchEnd(event) {
+             isDragging = false;
+        }
+
+        function setupTouchlookControls(element) {
+            // Desktop listeners
+            element.addEventListener('mousedown', onMouseDown, false);
+            element.addEventListener('mouseup', onMouseUp, false);
+            element.addEventListener('mousemove', onMouseMove, false);
+            
+            // Mobile listeners
+            element.addEventListener('touchstart', onTouchStart, { passive: false });
+            element.addEventListener('touchmove', onTouchMove, { passive: false });
+            element.addEventListener('touchend', onTouchEnd, false);
+            element.addEventListener('touchcancel', onTouchEnd, false);
+        }
+
+        // Teclado (Escritorio)
+        function onKeyDown(event) {
+            if (isGameOver) return;
+            switch (event.code) {
+                case 'KeyW': controls.forward = true; break;
+                case 'KeyS': controls.backward = true; break;
+                case 'KeyA': controls.strafeLeft = true; break;
+                case 'KeyD': controls.strafeRight = true; break;
+                case 'KeyQ': controls.turnLeft = true; break; // NUEVO
+                case 'KeyE': controls.turnRight = true; break; // NUEVO
+            }
+        }
+
+        function onKeyUp(event) {
+            if (isGameOver) return;
+            switch (event.code) {
+                case 'KeyW': controls.forward = false; break;
+                case 'KeyS': controls.backward = false; break;
+                case 'KeyA': controls.strafeLeft = false; break;
+                case 'KeyD': controls.strafeRight = false; break;
+                case 'KeyQ': controls.turnLeft = false; break; // NUEVO
+                case 'KeyE': controls.turnRight = false; break; // NUEVO
+            }
+        }
+        
+        // Controles D-Pad (Móvil)
+        function setupMobileControls() {
+            const movementButtons = ['up', 'down', 'strafeLeft', 'strafeRight'];
+            const rotationButtons = ['turnLeft', 'turnRight']; // NUEVO
+
+            const buttonHandler = (id, state) => (e) => {
+                e.preventDefault();
+                if (isGameOver) return;
+                
+                // Mapeo de movimiento
+                if (id === 'up') controls.forward = state;
+                else if (id === 'down') controls.backward = state;
+                else if (id === 'strafeLeft') controls.strafeLeft = state;
+                else if (id === 'strafeRight') controls.strafeRight = state;
+
+                // Mapeo de rotación (NUEVO)
+                else if (id === 'turnLeft') controls.turnLeft = state;
+                else if (id === 'turnRight') controls.turnRight = state;
+            };
+
+            [...movementButtons, ...rotationButtons].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    const startEvent = 'ontouchstart' in window ? 'touchstart' : 'mousedown';
+                    const endEvent = 'ontouchend' in window ? 'touchend' : 'mouseup';
+
+                    btn.addEventListener(startEvent, buttonHandler(id, true));
+                    btn.addEventListener(endEvent, buttonHandler(id, false));
+                    
+                    if ('ontouchmove' in window) {
+                        btn.addEventListener('touchcancel', buttonHandler(id, false));
+                    }
+                }
+            });
+        }
+        
+        // --- Lógica del Juego ---
+
+        // Función de detección de colisiones
+        function checkCollision(newPosition) {
+            const playerRadius = 0.4; 
+            const gridX = Math.floor(newPosition.x / tileSize);
+            const gridZ = Math.floor(newPosition.z / tileSize);
+
+            if (gridX < 0 || gridX >= mazeSize || gridZ < 0 || gridZ >= mazeSize) {
+                return true; 
+            }
+
+            for (let i = -1; i <= 1; i++) {
+                for (let j = -1; j <= 1; j++) {
+                    const checkX = gridX + i;
+                    const checkZ = gridZ + j;
+
+                    if (checkX >= 0 && checkX < mazeSize && checkZ >= 0 && checkZ < mazeSize) {
+                        if (mazeMap[checkZ][checkX] === 1) { // Pared
+                            
+                            const wallCenterX = (checkX + 0.5) * tileSize;
+                            const wallCenterZ = (checkZ + 0.5) * tileSize;
+
+                            const deltaX = newPosition.x - wallCenterX;
+                            const deltaZ = newPosition.z - wallCenterZ;
+                            
+                            // Comprobación de colisión cercana
+                            if (Math.abs(deltaX) < (tileSize / 2 + playerRadius) && 
+                                Math.abs(deltaZ) < (tileSize / 2 + playerRadius)) {
+                                
+                                return true; 
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+
+        function updateMovement() {
+            if (isGameOver) return;
+
+            const deltaTime = clock.getDelta();
+            const actualMoveSpeed = moveSpeed * deltaTime * 60; 
+
+            let attemptedPosition = camera.position.clone();
+            let moved = false;
+
+            // 1. Aplicar Rotación (primero para que el movimiento sea correcto)
+            if (controls.turnLeft) {
+                camera.rotation.y += buttonRotationSpeed;
+            }
+            if (controls.turnRight) {
+                camera.rotation.y -= buttonRotationSpeed;
+            }
+
+            // 2. Calcular Dirección de Movimiento (Adelante/Atrás)
+            const forwardDirection = new THREE.Vector3();
+            camera.getWorldDirection(forwardDirection);
+            forwardDirection.y = 0;
+            forwardDirection.normalize();
+
+            // 3. Calcular Dirección de Movimiento Lateral (Strafe)
+            const strafeDirection = new THREE.Vector3();
+            camera.getWorldDirection(strafeDirection);
+            strafeDirection.cross(camera.up); 
+            strafeDirection.y = 0;
+            strafeDirection.normalize();
+
+
+            // 4. Aplicar Movimiento
+            if (controls.forward) {
+                attemptedPosition.addScaledVector(forwardDirection, actualMoveSpeed);
+                moved = true;
+            }
+            if (controls.backward) {
+                attemptedPosition.addScaledVector(forwardDirection, -actualMoveSpeed);
+                moved = true;
+            }
+            if (controls.strafeRight) {
+                attemptedPosition.addScaledVector(strafeDirection, actualMoveSpeed);
+                moved = true;
+            }
+            if (controls.strafeLeft) {
+                attemptedPosition.addScaledVector(strafeDirection, -actualMoveSpeed);
+                moved = true;
+            }
+
+            // 5. Detección de Colisiones y Actualización
+            if (moved) {
+                attemptedPosition.y = playerHeight; 
+                
+                if (!checkCollision(attemptedPosition)) {
+                    camera.position.copy(attemptedPosition);
+                }
+            }
+
+            // 6. Checkear Condición de Victoria
+            const distanceSq = (camera.position.x - EXIT_WORLD_X)**2 + (camera.position.z - EXIT_WORLD_Z)**2;
+            if (distanceSq < WIN_DISTANCE_SQ) {
+                gameOver(true);
+            }
+        }
+
+        function gameOver(win) {
+            isGameOver = true;
+            if (win) {
+                document.getElementById('win-message').classList.remove('hidden');
+                document.getElementById('message-box').classList.add('hidden');
+                // Deshabilitar controles de teclado
+                document.removeEventListener('keydown', onKeyDown, false);
+                document.removeEventListener('keyup', onKeyUp, false);
+            }
+        }
+
+
+        // Bucle principal de animación
+        function animate() {
+            requestAnimationFrame(animate);
+
+            updateMovement();
+            updateColors(clock.getDelta());
+            renderer.render(scene, camera);
+        }
+
+        // Iniciar el juego al cargar la ventana
+        window.onload = function () {
+            init();
+            animate();
+            console.log("Laberinto 3D cargado. Controles completos: D-Pad, Botones de Giro y Touchlook.");
+        }
+    </script>
+</body>
+</html>
+
